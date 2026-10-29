@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ED103TC2 panel</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: #181818; color: #ddd;
+         display: flex; flex-wrap: wrap; gap: 20px; padding: 20px; box-sizing: border-box; }
+  .screen { flex: 1 1 560px; min-width: 300px; }
+  canvas { width: 100%; height: auto; background: #e9e9e9; border: 10px solid #2b2b2b;
+           border-radius: 6px; box-sizing: border-box; display: block; image-rendering: pixelated; }
+  .side { flex: 0 1 360px; display: flex; flex-direction: column; gap: 12px; }
+  fieldset { border: 1px solid #3a3a3a; border-radius: 8px; padding: 10px 12px; margin: 0; }
+  legend { color: #9a9; padding: 0 6px; font-size: .9em; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  button { background: #2e2e2e; color: #eee; border: 1px solid #555; border-radius: 6px;
+           padding: 7px 11px; cursor: pointer; font: inherit; }
+  button:hover { background: #3a3a3a; }
+  button.cur { background: #3d6b4f; border-color: #6c9; }
+  button.sel { outline: 2px solid #fc6; }
+  button:disabled { opacity: .45; cursor: default; }
+  input, select { background: #222; color: #eee; border: 1px solid #555; border-radius: 6px;
+                  padding: 6px 8px; font: inherit; width: 7em; }
+  label { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+  .status { font: 12px/1.5 ui-monospace, monospace; color: #9a9; margin-top: 8px; white-space: pre-wrap; }
+  .warn { color: #f96; }
+</style>
+</head>
+<body>
+<div class="screen">
+  <canvas id="c" width="468" height="351"></canvas>
+  <div class="status" id="status">connecting…</div>
+</div>
+<div class="side">
+  <fieldset><legend>Screens</legend><div class="row" id="screens"></div></fieldset>
+  <fieldset><legend>Menu overlay</legend>
+    <div class="row">
+      <button data-c="menu=open">Open</button><button data-c="menu=up">▲ Up</button>
+      <button data-c="menu=down">▼ Down</button><button data-c="menu=select">Select</button>
+      <button data-c="menu=close">Close</button>
+    </div>
+    <div class="row" id="menuitems" style="margin-top:8px"></div>
+  </fieldset>
+  <fieldset><legend>Panel</legend>
+    <div class="row">
+      <button data-c="next">Next screen</button><button data-c="clear">INIT clear</button>
+      <button data-c="white">White</button><button data-c="sleep">Sleep</button>
+      <button data-c="init">Re-init</button><button data-c="enhance">Enhance driving</button>
+    </div>
+  </fieldset>
+  <fieldset><legend>Tuning</legend>
+    <label>VCOM (mV, from the FPC label)<span><input id="vcom" type="number" min="500" max="5000" step="10"> <button id="setvcom">Set</button></span></label>
+    <label>Mirror horizontally<input id="mirror" type="checkbox" style="width:auto"></label>
+    <label>Menu move waveform<select id="movemode"><option value="6">A2 (fast, B/W)</option><option value="2">GC16 (clean)</option></select></label>
+    <label>SPI clock<select id="spihz"><option value="18750000">18.75 MHz</option><option value="12500000">12.5 MHz</option><option value="9375000">9.375 MHz</option><option value="7500000">7.5 MHz</option></select></label>
+    <label>Long press (ms)<span><input id="longpress" type="number" min="150" max="3000" step="50"> <button id="setlp">Set</button></span></label>
+    <label>Show URL banner on panel<input id="banner" type="checkbox" style="width:auto"></label>
+    <label>Preview scale<select id="scale"><option value="2">1/2</option><option value="3">1/3</option><option value="4" selected>1/4</option><option value="6">1/6</option></select></label>
+  </fieldset>
+  <fieldset><legend>Controller</legend><div class="status" id="info"></div></fieldset>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+let seq = -1, st = null, loading = false, built = false;
+
+async function cmd(q) {
+  try { await fetch('/api/cmd?' + q, { method: 'POST' }); } catch (e) {}
+  setTimeout(poll, 400);
+}
+document.querySelectorAll('button[data-c]').forEach(b => b.onclick = () => cmd(b.dataset.c));
+$('#setvcom').onclick = () => cmd('vcom=' + $('#vcom').value);
+$('#setlp').onclick   = () => cmd('longpress=' + $('#longpress').value);
+$('#mirror').onchange   = e => cmd('mirror=' + (e.target.checked ? 1 : 0));
+$('#banner').onchange   = e => cmd('banner=' + (e.target.checked ? 1 : 0));
+$('#movemode').onchange = e => cmd('movemode=' + e.target.value);
+$('#spihz').onchange    = e => cmd('spihz=' + e.target.value);
+$('#scale').onchange    = () => { seq = -1; poll(); };
+
+function build(s) {
+  const sc = $('#screens'); sc.innerHTML = '';
+  s.screens.forEach((n, i) => { const b = document.createElement('button'); b.textContent = (i + 1) + ' ' + n; b.onclick = () => cmd('show=' + i); sc.appendChild(b); });
+  const mi = $('#menuitems'); mi.innerHTML = '';
+  s.menu_items.forEach((n, i) => { const b = document.createElement('button'); b.textContent = n; b.onclick = () => cmd('menusel=' + i); mi.appendChild(b); });
+  built = true;
+}
+
+function render(s) {
+  if (!built) build(s);
+  [...$('#screens').children].forEach((b, i) => b.classList.toggle('cur', i === s.screen));
+  [...$('#menuitems').children].forEach((b, i) => { b.classList.toggle('sel', s.menu_open && i === s.menu_sel); b.disabled = !s.menu_open; });
+  const set = (id, v) => { const el = $(id); if (document.activeElement !== el) el.value = v; };
+  set('#vcom', s.vcom_mv); set('#longpress', s.long_press_ms); set('#movemode', s.move_mode); set('#spihz', s.spi_hz);
+  $('#mirror').checked = !!s.mirror; $('#banner').checked = !!s.banner;
+  $('#status').innerHTML = (s.busy ? '<span class="warn">painting…</span> ' : '') +
+    `screen ${s.screen + 1}: ${s.screens[s.screen]}` + (s.menu_open ? ` · menu on "${s.menu_items[s.menu_sel]}"` : '') +
+    ` · last paint: stream ${s.last_stream_ms} ms + refresh ${s.last_refresh_ms} ms · paints ${s.paints}`;
+  $('#info').textContent =
+    `panel ${s.panel.w}x${s.panel.h}  LUT ${s.panel.lut}  FW ${s.panel.fw}  buffer ${s.panel.addr}\n` +
+    `VCOM -${(s.vcom_mv / 1000).toFixed(2)} V${s.vcom_mv < 500 ? '  ⚠ not set' : ''}  ·  SPI ${(s.spi_hz / 1e6).toFixed(3)} MHz  ·  PSRAM ${s.psram ? 'yes' : 'no'}\n` +
+    `wifi ${s.ip}  rssi ${s.rssi} dBm  ·  up ${Math.floor(s.uptime_s / 60)} min`;
+}
+
+async function loadFrame() {
+  if (loading) return; loading = true;
+  try {
+    const buf = await (await fetch('/frame?s=' + $('#scale').value)).arrayBuffer();
+    const v = new DataView(buf), w = v.getUint16(0, true), h = v.getUint16(2, true);
+    const c = $('#c'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d'), img = ctx.createImageData(w, h), px = new Uint8Array(buf, 4), d = img.data, rb = w >> 1;
+    for (let y = 0, o = 0; y < h; y++) for (let x = 0; x < w; x++, o += 4) {
+      const b = px[y * rb + (x >> 1)], g = ((x & 1) ? (b & 15) : (b >> 4)) * 17;
+      d[o] = d[o + 1] = d[o + 2] = g; d[o + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  } catch (e) { seq = -1; }
+  loading = false;
+}
+
+async function poll() {
+  try {
+    st = await (await fetch('/api/state')).json();
+    render(st);
+    if (st.paints !== seq && !st.busy) { seq = st.paints; await loadFrame(); }
+  } catch (e) { $('#status').textContent = 'device unreachable: ' + e; }
+}
+setInterval(poll, 1500);
+poll();
+</script>
+</body>
+</html>

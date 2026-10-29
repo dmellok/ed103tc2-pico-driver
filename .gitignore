@@ -1,0 +1,4 @@
+.pio/
+.vscode/
+*.uf2
+include/wifi_secrets.h
